@@ -1,0 +1,296 @@
+/*
+Aggregate Banking Trends
+– What percentage of new deposits are going to small vs. large banks? use fdic grp of tables(has deposits and assets)
+– How much operating income did the banking industry lose during the Global Financial Crisis?
+- What percentage of the bank’s deposits are insured by the FDIC?
+
+How did policy changes change trends in employment for a particular industry/metro area?
+- join bureau tables and using geo_id find unemployment rates
+*/
+
+CREATE OR REPLACE TABLE BANK_ENTITIES AS
+SELECT * FROM FINANCE__ECONOMICS.CYBERSYN.FINANCIAL_INSTITUTION_ENTITIES;
+
+CREATE OR REPLACE TABLE BANK_HIERARCHY AS
+SELECT * FROM FINANCE__ECONOMICS.CYBERSYN.FINANCIAL_INSTITUTION_HIERARCHY;
+
+
+-- 1. What percentage of new deposits are going to small vs. large banks?
+
+--Small banks, defined as those with $10 billion or less in total assets.
+
+CREATE OR REPLACE TABLE DEPOSIT_DATA AS
+SELECT 
+        ts.FDIC_INSTITUTION_ID,
+        ts.FDIC_BRANCH_ID,
+        ts.DATE,
+        ts.VALUE AS DEPOSIT_VALUE,
+        attr.*
+    FROM FINANCE__ECONOMICS.CYBERSYN.FDIC_SUMMARY_OF_DEPOSITS_TIMESERIES ts
+    INNER JOIN FINANCE__ECONOMICS.CYBERSYN.FDIC_SUMMARY_OF_DEPOSITS_ATTRIBUTES attr
+    ON ts.VARIABLE = attr.VARIABLE
+
+CREATE OR REPLACE TABLE FDIC_BRANCHES AS
+SELECT 
+a.*,
+b.institution_name,
+b.established_date,
+b.acquired_date,
+b.latitude,
+b.longitude,
+b.city
+FROM
+DEPOSIT_DATA AS a JOIN FINANCE__ECONOMICS.CYBERSYN.FDIC_BRANCH_LOCATIONS_INDEX AS b
+ON a.fdic_institution_id=b.fdic_institution_id;
+
+
+CREATE OR REPLACE TABLE BANK_CLASSES AS
+SELECT 
+        CASE 
+            WHEN SUM(DEPOSIT_VALUE) <= 1E10 THEN 'Small Bank'  
+            ELSE 'Large Bank'
+        END 
+        AS bank_size,
+        b.fdic_institution_id
+FROM deposit_data as a JOIN FINANCE__ECONOMICS.CYBERSYN.FDIC_BRANCH_LOCATIONS_INDEX as b
+ON a.fdic_institution_id=b.fdic_institution_id
+group by b.fdic_institution_id;
+
+CREATE OR REPLACE TABLE NEW_DEPOSITS AS
+WITH
+new_deposits AS (
+    SELECT 
+        bc.bank_size,
+        d.DATE,
+        d.FDIC_INSTITUTION_ID,
+        d.DEPOSIT_VALUE - LAG(d.DEPOSIT_VALUE) OVER (PARTITION BY d.FDIC_INSTITUTION_ID ORDER BY d.DATE) AS new_deposit_value
+    FROM deposit_data d
+    INNER JOIN BANK_CLASSES bc
+    ON d.FDIC_INSTITUTION_ID = bc.FDIC_INSTITUTION_ID
+)
+SELECT 
+    a.fdic_institution_id,
+    b.institution_name,
+    c.bank_size,
+    SUM(new_deposit_value) AS total_new_deposits,
+    ROUND((SUM(new_deposit_value) * 100.0) / SUM(SUM(new_deposit_value)) OVER (), 2) AS pct_share
+FROM new_deposits as a LEFT JOIN FDIC_BRANCHES as b
+on a.fdic_institution_id=b.fdic_institution_id
+JOIN BANK_CLASSES as c ON  a.fdic_institution_id=c.fdic_institution_id
+WHERE new_deposit_value > 0
+group by 1,2,3
+order by total_new_deposits desc;
+
+SELECT * FROM FINANCE__ECONOMICS.CYBERSYN.FDIC_BRANCH_LOCATIONS_INDEX WHERE FDIC_INSTITUTION_ID=417
+
+
+WITH deposit_data AS (
+    SELECT 
+        ts.FDIC_INSTITUTION_ID,
+        ts.DATE,
+        ts.VALUE AS DEPOSIT_VALUE,
+        attr.VARIABLE_NAME
+    FROM FINANCE__ECONOMICS.CYBERSYN.FDIC_SUMMARY_OF_DEPOSITS_TIMESERIES ts
+    INNER JOIN FINANCE__ECONOMICS.CYBERSYN.FDIC_SUMMARY_OF_DEPOSITS_ATTRIBUTES attr
+    ON ts.VARIABLE = attr.VARIABLE  -- Adjust based on the correct variable for deposits
+),
+bank_classes AS (
+    SELECT 
+        FDIC_INSTITUTION_ID,
+        CASE 
+            WHEN SUM(DEPOSIT_VALUE) <= 1E10 THEN 'Small Bank'  -- Define small banks as those with <= $1B deposits
+            ELSE 'Large Bank'
+        END AS bank_size
+    FROM deposit_data
+    GROUP BY FDIC_INSTITUTION_ID
+),
+new_deposits AS (
+    SELECT 
+        bc.bank_size,
+        d.DATE,
+        d.FDIC_INSTITUTION_ID,
+        d.DEPOSIT_VALUE - LAG(d.DEPOSIT_VALUE) OVER (PARTITION BY d.FDIC_INSTITUTION_ID ORDER BY d.DATE) AS new_deposit_value
+    FROM deposit_data d
+    INNER JOIN bank_classes bc
+    ON d.FDIC_INSTITUTION_ID = bc.FDIC_INSTITUTION_ID
+)
+SELECT 
+    bank_size,
+    SUM(new_deposit_value) AS total_new_deposits,
+    ROUND((SUM(new_deposit_value) * 100.0) / SUM(SUM(new_deposit_value)) OVER (), 2) AS pct_share
+FROM new_deposits
+WHERE new_deposit_value > 0  -- Only consider positive changes (new deposits)
+GROUP BY bank_size;
+
+
+WITH deposit_data AS (
+    SELECT 
+        ts.FDIC_INSTITUTION_ID,
+        ts.FDIC_BRANCH_ID,
+        ts.DATE,
+        ts.VALUE AS DEPOSIT_VALUE,
+        attr.VARIABLE_NAME
+    FROM FINANCE__ECONOMICS.CYBERSYN.FDIC_SUMMARY_OF_DEPOSITS_TIMESERIES ts
+    INNER JOIN FINANCE__ECONOMICS.CYBERSYN.FDIC_SUMMARY_OF_DEPOSITS_ATTRIBUTES attr
+    ON ts.VARIABLE = attr.VARIABLE 
+)
+SELECT 
+    FDIC_BRANCH_ID,
+    SUM(deposit_value) AS total_deposits
+FROM DEPOSIT_DATA
+WHERE deposit_value > 0 
+AND FDIC_BRANCH_ID=40088
+GROUP BY FDIC_BRANCH_ID
+ORDER BY TOTAL_DEPOSITS DESC
+LIMIT 10;
+
+SELECT FDIC_BRANCH_ID, FDIC_INSTITUTION_ID, INSTITUTION_NAME ,
+LATITUDE, LONGITUDE
+FROM FINANCE__ECONOMICS.CYBERSYN.FDIC_BRANCH_LOCATIONS_INDEX
+WHERE FDIC_BRANCH_ID IN (
+417,
+2238,
+2239,
+4759,
+4383,
+4287,
+12315,
+6300,
+420,
+2818
+);
+
+SELECT FDIC_BRANCH_ID, CITY, LATITUDE, LONGITUDE
+FROM FINANCE__ECONOMICS.CYBERSYN.FDIC_BRANCH_LOCATIONS_INDEX
+WHERE FDIC_BRANCH_ID IN (
+417,
+2238,
+2239,
+4759,
+4383,
+4287,
+12315,
+6300,
+420,
+2818,
+40088
+);
+
+
+
+
+-- 2. How much operating income did the banking industry lose during the Global Financial Crisis?
+
+CREATE OR REPLACE TABLE BANK AS
+SELECT 
+    fi.*,
+    fa.definition,
+    fa.frequency
+FROM
+        FINANCE__ECONOMICS.CYBERSYN.FINANCIAL_INSTITUTION_TIMESERIES fi
+    JOIN
+        FINANCE__ECONOMICS.CYBERSYN.FINANCIAL_INSTITUTION_ATTRIBUTES fa
+        ON fi.VARIABLE = fa.VARIABLE
+
+CREATE OR REPLACE TABLE OPERATING_INCOME AS
+WITH operating_income_data AS (
+    SELECT
+        ID_RSSD,
+        VARIABLE_NAME,
+        DATE,
+        VALUE AS operating_income
+    FROM
+        BANK
+    WHERE
+        VARIABLE_NAME LIKE '%Income%'  
+        OR VARIABLE_NAME LIKE '%Revenue%'
+        OR VARIABLE_NAME LIKE '%Profit%'
+        OR VARIABLE_NAME LIKE '%Noninterest Income%'
+        OR VARIABLE_NAME LIKE '%Operating Income%'
+        AND DATE BETWEEN '2007-01-01' AND '2009-12-31'  
+)
+
+SELECT
+    o.ID_RSSD,
+    SUM(CASE WHEN EXTRACT(YEAR FROM o.DATE) = 2007 THEN o.operating_income ELSE 0 END) AS income_2007,
+    SUM(CASE WHEN EXTRACT(YEAR FROM o.DATE) = 2008 THEN o.operating_income ELSE 0 END) AS income_2008,
+    SUM(CASE WHEN EXTRACT(YEAR FROM o.DATE) = 2009 THEN o.operating_income ELSE 0 END) AS income_2009,
+    (SUM(CASE WHEN EXTRACT(YEAR FROM o.DATE) = 2007 THEN o.operating_income ELSE 0 END) -
+     SUM(CASE WHEN EXTRACT(YEAR FROM o.DATE) = 2008 THEN o.operating_income ELSE 0 END)) AS loss_in_2008,
+    (SUM(CASE WHEN EXTRACT(YEAR FROM o.DATE) = 2008 THEN o.operating_income ELSE 0 END) -
+     SUM(CASE WHEN EXTRACT(YEAR FROM o.DATE) = 2009 THEN o.operating_income ELSE 0 END)) AS loss_in_2009
+FROM
+    operating_income_data o
+GROUP BY
+    o.ID_RSSD
+ORDER BY
+    loss_in_2008 DESC, loss_in_2009 DESC;
+
+
+-- 3.  What percentage of the bank’s deposits are insured by the FDIC?
+
+CREATE OR REPLACE TABLE FDIC_INSURED AS
+WITH big_banks AS (
+    SELECT id_rssd
+    FROM finance__economics.cybersyn.financial_institution_timeseries
+    WHERE variable = 'ASSET'
+      AND date = '2022-12-31'
+      AND value > 1E10 
+)
+SELECT name,
+       value AS pct_insured,  
+       ent.is_active
+FROM FINANCE__ECONOMICS.cybersyn.financial_institution_timeseries AS ts
+INNER JOIN FINANCE__ECONOMICS.cybersyn.financial_institution_attributes AS att ON (ts.variable = att.variable)
+INNER JOIN FINANCE__ECONOMICS.cybersyn.financial_institution_entities AS ent ON (ts.id_rssd = ent.id_rssd)
+INNER JOIN big_banks ON (big_banks.id_rssd = ts.id_rssd)
+WHERE ts.date = '2022-12-31'
+  AND att.variable_name = '% Insured (Estimated)'  -- FDIC insured percentage variable
+  AND att.frequency = 'Quarterly'
+ORDER BY pct_insured DESC;
+
+
+
+SELECT
+  ent.name AS bank_name,
+  ts.value AS net_income
+FROM
+  cybersyn.financial_institution_timeseries AS ts
+INNER JOIN
+  cybersyn.financial_institution_attributes AS att ON ts.variable = att.variable
+INNER JOIN
+  cybersyn.financial_institution_entities AS ent ON ts.id_rssd = ent.id_rssd
+WHERE att.frequency = 'YTD'
+ORDER BY
+  net_income DESC;
+
+
+WITH expansion AS (
+    SELECT 
+        fe.id_rssd_successor AS bank_id,
+        fe.transaction_date,
+        ent.id_state AS new_state,
+        ent.name AS bank_name
+    FROM 
+        cybersyn.financial_institution_events AS fe
+    INNER JOIN 
+        cybersyn.financial_institution_entities AS ent ON fe.id_rssd_successor = ent.id_rssd
+    WHERE 
+        fe.transformation_type = 'Charter Retained' 
+        AND fe.active_successor = TRUE 
+)
+SELECT 
+    e.bank_name,
+    COUNT(DISTINCT e.new_state) AS states_expanded_to
+FROM 
+    expansion AS e
+GROUP BY 
+    e.bank_name
+ORDER BY 
+    states_expanded_to DESC;
+
+
+select distinct transformation_type from FINANCE__ECONOMICS.CYBERSYN.FINANCIAL_INSTITUTION_EVENTS;
+
+create or replace schema analytics.staging;
+create or replace database analytics;
