@@ -1,0 +1,103 @@
+-- SAMPLE QUERIES
+
+USE DATABASE FINANCE__ECONOMICS;
+
+select * from FINANCE__ECONOMICS.CYBERSYN.FX_RATES_TIMESERIES;
+
+select * from FINANCE__ECONOMICS.CYBERSYN.BUREAU_OF_LABOR_STATISTICS_PRICE_TIMESERIES;
+
+-- How a particular FX affects a particular CPI
+SELECT fx.DATE, fx.VALUE AS FX_RATE, cpi.VALUE AS PET_CPI
+FROM  FINANCE__ECONOMICS.CYBERSYN.FX_RATES_TIMESERIES fx
+INNER JOIN FINANCE__ECONOMICS.CYBERSYN.BUREAU_OF_LABOR_STATISTICS_PRICE_TIMESERIES cpi
+ON fx.DATE = cpi.DATE
+WHERE fx.VARIABLE_NAME = 'NZD/USD Exchange Rate'
+  AND cpi.VARIABLE_NAME = 'CPI: Pets, pet products and services, Not seasonally adjusted, Monthly, 1997-12 Index Date';
+
+-- Banks with the highest percentage of uninsured deposits.
+WITH big_banks AS (
+    SELECT id_rssd
+    FROM cybersyn.financial_institution_timeseries
+    WHERE variable = 'ASSET'
+      AND date = '2022-12-31'
+      AND value > 1E10
+)
+SELECT name,
+       1 - value AS pct_uninsured,
+       ent.is_active
+FROM cybersyn.financial_institution_timeseries AS ts
+INNER JOIN cybersyn.financial_institution_attributes AS att ON (ts.variable = att.variable)
+INNER JOIN cybersyn.financial_institution_entities AS ent ON (ts.id_rssd = ent.id_rssd)
+INNER JOIN big_banks ON (big_banks.id_rssd = ts.id_rssd)
+WHERE ts.date = '2022-12-31'
+  AND att.variable_name = '% Insured (Estimated)'
+  AND att.frequency = 'Quarterly'
+ORDER BY pct_uninsured DESC;
+
+
+-- FX with the most daily change
+WITH daily_changes AS (
+    SELECT 
+        base_currency_name,
+        quote_currency_name,
+        DATE,
+        VALUE,
+        LAG(VALUE) OVER (PARTITION BY base_currency_name, quote_currency_name ORDER BY DATE) AS prev_value
+    FROM cybersyn.fx_rates_timeseries
+)
+SELECT 
+    base_currency_name,
+    quote_currency_name,
+    DATE,
+    ABS(VALUE - prev_value) AS daily_change
+FROM daily_changes
+WHERE prev_value IS NOT NULL
+ORDER BY daily_change DESC
+LIMIT 10;
+
+-- Small banks and their assets
+WITH small_banks AS (
+    SELECT id_rssd
+    FROM cybersyn.financial_institution_timeseries
+    WHERE variable = 'ASSET'
+      AND date = '2022-12-31'
+      AND value <= 1E9 
+)
+SELECT 
+    name,
+    ts.date,
+    ts.value AS asset_value
+FROM cybersyn.financial_institution_timeseries AS ts
+INNER JOIN cybersyn.financial_institution_entities AS ent ON (ts.id_rssd = ent.id_rssd)
+INNER JOIN small_banks ON (small_banks.id_rssd = ts.id_rssd)
+WHERE ts.variable = 'ASSET'
+ORDER BY ts.date ASC;
+
+-- Total new deposits of large bank vs small bank
+WITH bank_size AS (
+    SELECT id_rssd, 
+           CASE
+               WHEN value < 1E9 THEN 'Small'
+               WHEN value >= 1E9 THEN 'Large'
+           END AS bank_size
+    FROM cybersyn.financial_institution_timeseries
+    WHERE variable = 'ASSET'
+      AND date BETWEEN '2023-01-01' AND '2023-12-31'
+),
+new_deposits AS (
+    SELECT ts.id_rssd,
+           ts.value AS new_deposit_value
+    FROM cybersyn.financial_institution_timeseries AS ts
+    WHERE ts.variable_name like '%Deposits%'
+      AND ts.date BETWEEN '2023-01-01' AND '2023-12-31'
+)
+SELECT bs.bank_size,
+       SUM(nd.new_deposit_value) AS total_new_deposits
+FROM bank_size AS bs
+INNER JOIN new_deposits AS nd ON bs.id_rssd = nd.id_rssd
+GROUP BY bs.bank_size;
+
+SELECT variable from  cybersyn.financial_institution_timeseries;
+
+create or replace schema analytics.staging;
+create or replace database analytics;
