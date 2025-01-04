@@ -1,0 +1,94 @@
+--– Which banks hold the highest percentage of assets at a foreign office?
+
+-- list of branches of that banks
+WITH branch AS (
+    SELECT id_rssd_parent, COUNT(*) AS branch_count
+    FROM FINANCE__ECONOMICS.CYBERSYN.FINANCIAL_BRANCH_ENTITIES
+    WHERE is_active = TRUE
+    GROUP BY id_rssd_parent
+)
+
+-- Bank with high assets
+SELECT ts.id_rssd, sum(ts.value) AS total_assets
+FROM FINANCE__ECONOMICS.CYBERSYN.FINANCIAL_INSTITUTION_TIMESERIES ts
+INNER JOIN branch b ON ts.id_rssd = b.id_rssd_parent
+WHERE ts.VARIABLE = 'ASSET'
+group by ts.id_rssd
+order by total_assets desc
+LIMIT 10;
+
+-- assets of branches
+select *
+from FINANCE__ECONOMICS.CYBERSYN.FINANCIAL_BRANCH_ENTITIES a
+join FINANCE__ECONOMICS.CYBERSYN.FINANCIAL_INSTITUTION_TIMESERIES b
+on a.id_rssd=b.id_rssd
+where b.variable='ASSET'
+
+
+select distinct category from FINANCE__ECONOMICS.CYBERSYN.FINANCIAL_BRANCH_ENTITIES;
+
+-- Which banks are reducing their overall physical footprint? How many branches have they closed?
+CREATE OR REPLACE TABLE CLOSED_BRANCHES AS
+WITH branch_changes AS (
+    SELECT 
+        id_rssd_parent,
+        COUNT(CASE WHEN end_date IS NOT NULL THEN 1 END) AS branches_closed,
+        COUNT(CASE WHEN is_active = TRUE THEN 1 END) AS active_branches,
+        COUNT(*) AS total_branches
+    FROM FINANCE__ECONOMICS.CYBERSYN.FINANCIAL_BRANCH_ENTITIES
+    GROUP BY id_rssd_parent
+)
+SELECT 
+    b.id_rssd_parent,
+    f.name AS bank_name,
+    b.branches_closed,
+    b.active_branches,
+    b.total_branches,
+    ROUND((b.branches_closed::float / b.total_branches) * 100, 2) AS pct_branches_closed
+FROM branch_changes b
+LEFT JOIN FINANCE__ECONOMICS.CYBERSYN.FINANCIAL_INSTITUTION_ENTITIES f
+    ON b.id_rssd_parent = f.id_rssd
+WHERE branches_closed > 0
+ORDER BY ACTIVE_BRANCHES DESC
+LIMIT 10;
+
+
+-- – Which banks expanded into new geographies with branches in new states? What is the median income in these new areas?
+WITH new_geographies AS (
+    SELECT 
+        id_rssd_parent,
+        state_abbreviation
+    FROM 
+        FINANCE__ECONOMICS.CYBERSYN.FINANCIAL_BRANCH_ENTITIES
+    WHERE 
+        is_active = TRUE
+)
+median_income AS (
+    SELECT
+        *
+    FROM
+        FINANCE__ECONOMICS.CYBERSYN.FINANCIAL_INSTITUTION_TIMESERIES 
+    WHERE
+        VARIABLE_NAME LIKE '%Income%'  -- We focus on income-related variables
+        OR VARIABLE_NAME LIKE '%Revenue%'
+        OR VARIABLE_NAME LIKE '%Profit%'
+        OR VARIABLE_NAME LIKE '%Noninterest Income%'
+        OR VARIABLE_NAME LIKE '%Operating Income%'
+        AND VALUE!=0
+        AND VALUE!=NULL
+        AND UNIT='USD'
+)
+SELECT 
+    ng.id_rssd_parent AS bank_id,
+    ng.state_abbreviation AS new_state,
+    mi.median_income
+FROM 
+    new_geographies AS ng
+LEFT JOIN 
+    median_income AS mi
+ON 
+    ng.state_abbreviation = mi.state_abbreviation
+ORDER BY 
+    bank_id, new_state;
+
+
