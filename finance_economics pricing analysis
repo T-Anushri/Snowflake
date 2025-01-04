@@ -1,0 +1,110 @@
+/*Pricing Analysis
+– Which types of goods or products are seeing the highest levels of inflation?
+– How have residential real estate property prices changed over time?
+– How do consumer price indicators compare across countries?
+*/
+
+-- – How have residential real estate property prices changed over time?
+
+CREATE OR REPLACE TABLE HOUSE_PRICES AS
+SELECT 
+    b.variable,
+    b.variable_name,
+    b.geo_id,
+    b.date,
+    b.value,
+    b.unit,
+    a.FREQUENCY,
+    a.INDEX_TYPE,
+    a.PROPERTY_CLASSIFICATION,
+    a.SEASONALLY_ADJUSTED
+FROM
+FINANCE__ECONOMICS.CYBERSYN.FHFA_HOUSE_PRICE_ATTRIBUTES AS a
+INNER JOIN
+FINANCE__ECONOMICS.CYBERSYN.FHFA_HOUSE_PRICE_TIMESERIES AS b
+ON a.variable=b.variable
+
+SELECT 
+    YEAR(date) AS year,
+    AVG(value) AS average_value,
+    COUNT(*) AS count,
+    MIN(value) AS min_value,
+    MAX(value) AS max_value
+FROM 
+    HOUSE_PRICES
+WHERE 
+    date >= '2000-01-01'
+    AND frequency = 'QUARTERLY'
+GROUP BY 
+    YEAR(date)
+ORDER BY 
+    year;
+
+
+-- – Which types of goods or products are seeing the highest levels of inflation?
+
+CREATE OR REPLACE TABLE PRICE_STATISTICS AS
+SELECT 
+b.geo_id,
+b.value,
+b.date,
+a.*
+FROM
+FINANCE__ECONOMICS.CYBERSYN.BUREAU_OF_LABOR_STATISTICS_PRICE_ATTRIBUTES AS a
+INNER JOIN
+FINANCE__ECONOMICS.CYBERSYN.BUREAU_OF_LABOR_STATISTICS_PRICE_TIMESERIES AS b
+ON a.variable=b.variable
+
+CREATE OR REPLACE TABLE INFLATION_RATE AS
+SELECT 
+    product,
+    MAX(value) - MIN(value) AS inflation_rate,
+    MIN(date) AS start_date,
+    MAX(date) AS end_date
+FROM 
+    PRICE_STATISTICS
+WHERE 
+    date BETWEEN '2020-01-01' AND '2023-12-31'
+    AND report='Average Price'
+GROUP BY 
+    product
+ORDER BY 
+    inflation_rate DESC
+LIMIT 10;
+
+-- – How do consumer price indicators compare across countries?
+
+CREATE OR REPLACE TABLE COUNTRIES AS
+SELECT 
+*
+FROM
+FINANCE__ECONOMICS.CYBERSYN.GEOGRAPHY_INDEX
+
+SELECT * FROM PRICE_STATISTICS AS a JOIN COUNTRIES AS b ON a.geo_id=b.geo_id
+
+CREATE OR REPLACE TABLE CPI_COUNTRIES AS
+SELECT 
+    g.GEO_NAME,
+    AVG(b.value) AS avg_cpi,
+    MAX(b.value) AS max_cpi,
+    MIN(b.value) AS min_cpi,
+    MAX(b.value) - MIN(b.value) AS cpi_range,
+    MIN(b.date) AS start_date,
+    MAX(b.date) AS end_date
+FROM 
+    PRICE_STATISTICS AS b
+JOIN 
+    COUNTRIES AS g
+ON 
+    b.geo_id = g.geo_id
+WHERE 
+    b.report = 'Consumer Price Index' 
+GROUP BY 
+    g.GEO_NAME
+
+
+select distinct geo_name from countries;
+
+select distinct REPORT from PRICE_STATISTICS;
+
+select distinct frequency from house_prices;
